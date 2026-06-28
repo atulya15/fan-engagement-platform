@@ -33,6 +33,11 @@ from metrics.retention import (
     rolling_28d_retention,
     segment_retention,
 )
+from experimentation.analyze import (
+    analyze_feed_experiment,
+    analyze_onboarding_experiment,
+    analyze_push_experiment,
+)
 
 st.set_page_config(
     page_title="Fan Engagement Platform",
@@ -212,6 +217,24 @@ def load_content_depth():
 @st.cache_data(ttl=300)
 def load_widget_performance():
     return widget_performance()
+
+
+# Experiment queries are heavier (per-user pulls over ~2M events on a
+# free-tier nano Postgres instance) — cached for an hour, not 5 minutes,
+# since experiment results don't need to refresh as often as live KPIs.
+@st.cache_data(ttl=3600)
+def load_feed_experiment():
+    return analyze_feed_experiment()
+
+
+@st.cache_data(ttl=3600)
+def load_onboarding_experiment():
+    return analyze_onboarding_experiment()
+
+
+@st.cache_data(ttl=3600)
+def load_push_experiment():
+    return analyze_push_experiment()
 
 
 def kpi_card(col, label: str, value: str, insight: str | None = None):
@@ -473,9 +496,151 @@ with tab_growth:
 # ============================================================
 # EXPERIMENTS (Phase 4)
 # ============================================================
+def decision_badge(decision: dict):
+    rec = decision["recommendation"]
+    color = {"ship": "#3FB950", "no-ship": "#F85149", "inconclusive": "#D29922"}[rec]
+    st.markdown(
+        f"<div style='display:inline-block;background:{color}22;border:1px solid {color};"
+        f"color:{color};padding:0.3rem 0.9rem;border-radius:20px;font-weight:700;"
+        f"text-transform:uppercase;font-size:0.8rem;'>{rec}</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(decision["reason"])
+
+
+def ci_bar_chart(label_a: str, label_b: str, result, as_pct: bool):
+    scale = 100 if as_pct else 1
+    fig = go.Figure()
+    for label, val, err_low, err_high, color in [
+        (label_a, result.metric_a, 0, 0, "#3D4F6B"),
+        (label_b, result.metric_b, abs(result.diff - result.ci_low) if result.ci_low <= result.diff else 0,
+         abs(result.ci_high - result.diff), ACCENT),
+    ]:
+        fig.add_trace(go.Bar(x=[label], y=[val * scale], marker_color=color,
+                              error_y=dict(type="data", array=[err_high * scale], arrayminus=[err_low * scale])
+                              if label == label_b else None))
+    fig.update_layout(template=PLOTLY_TEMPLATE, height=300, margin=dict(t=10, b=10), showlegend=False,
+                       yaxis_title=("%" if as_pct else "value"))
+    st.plotly_chart(fig, width='stretch')
+
+
 with tab_experiments:
-    st.info("📍 Coming in Phase 4 — A/B test results, sample size/power calculations, "
-            "CUPED variance reduction, and ship/no-ship recommendations for 3 pre-built experiments.")
+    st.caption("Each experiment below ran on real per-user data from the simulated platform — "
+               "every number is a measured result, not a canned example.")
+
+    with st.spinner("Running experiment analysis (per-user queries over ~2M events, cached for 1hr after first load)..."):
+        feed = load_feed_experiment()
+        onboarding = load_onboarding_experiment()
+        push = load_push_experiment()
+
+    exp_choice = st.selectbox("Select experiment", [feed["name"], onboarding["name"], push["name"]])
+
+    st.divider()
+
+    if exp_choice == feed["name"]:
+        st.subheader(feed["name"])
+        st.caption("**Hypothesis:** a personalized content/widget feed increases Day-7 retention vs. a chronological feed. "
+                   "**Primary metric:** bounded Day-7 retention (returned on exactly day 7).")
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            ci_bar_chart("Control", "Treatment", feed["primary"], as_pct=True)
+        with c2:
+            decision_badge(feed["decision"])
+            st.metric("Lift", f"{feed['primary'].relative_lift_pct:.1f}%",
+                      f"{feed['primary'].diff*100:.1f}pp")
+            st.metric("p-value", f"{feed['primary'].p_value:.4f}")
+            st.metric("Required n/arm (for MDE)", f"{feed['required_n_per_arm']:,}",
+                       help=f"We had {feed['primary'].n_a:,} (achieved power: {feed['achieved_power']:.0%})")
+        insight("Unbounded Day-7 retention (active any time on/after day 7) was nearly flat between arms in earlier "
+                "analysis — it was already near ceiling. Bounded retention (returned on EXACTLY day 7) is the "
+                "sensitive metric for this experiment; using the unbounded version would have hidden a real effect.")
+        st.markdown(f"**Guardrail (avg session duration):** {'✅ OK' if feed['guardrail_ok'] else '⚠️ Violated'} "
+                    f"(p={feed['guardrail'].p_value:.3f}, diff={feed['guardrail'].diff:+.1f}s)")
+        st.markdown("**Segment breakdown (by acquisition channel):**")
+        seg_df = pd.DataFrame([{"channel": s["segment"], "lift_pp": s["result"].diff * 100,
+                                 "p_value": s["result"].p_value} for s in feed["segment_results"]])
+        st.dataframe(seg_df, width='stretch', hide_index=True)
+
+    elif exp_choice == onboarding["name"]:
+        st.subheader(onboarding["name"])
+        st.caption("**Hypothesis:** reducing onboarding from 5 steps to 2 increases signup-to-first-engagement "
+                   "conversion. **Primary metric:** % of users who ever reach a first interaction.")
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            ci_bar_chart("Control", "Treatment", onboarding["primary"], as_pct=True)
+        with c2:
+            decision_badge(onboarding["decision"])
+            st.metric("Lift", f"{onboarding['primary'].relative_lift_pct:.1f}%",
+                      f"{onboarding['primary'].diff*100:.1f}pp")
+            st.metric("p-value", f"{onboarding['primary'].p_value:.2e}")
+            st.metric("Required n/arm (for MDE)", f"{onboarding['required_n_per_arm']:,}",
+                       help=f"We had {onboarding['primary'].n_a:,} (achieved power: {onboarding['achieved_power']:.0%})")
+        st.markdown(f"**Guardrail (completion rate):** {'✅ OK' if onboarding['guardrail_ok'] else '⚠️ Violated'} "
+                    f"(p={onboarding['guardrail'].p_value:.2e}, diff={onboarding['guardrail'].diff*100:+.1f}pp) — "
+                    "completion rate also went UP, not down, so the simpler flow isn't trading quality for speed.")
+        st.markdown("**Segment breakdown (by acquisition channel):**")
+        seg_df = pd.DataFrame([{"channel": s["segment"], "lift_pp": s["result"].diff * 100,
+                                 "p_value": s["result"].p_value} for s in onboarding["segment_results"]])
+        st.dataframe(seg_df, width='stretch', hide_index=True)
+
+    else:
+        st.subheader(push["name"])
+        st.caption("**Hypothesis:** ML-optimized push timing increases session frequency vs. fixed morning/evening "
+                   "sends. **Primary comparison:** ml_optimized vs. morning (the pre-existing baseline approach). "
+                   "**Primary metric:** total sessions per user.")
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            ci_bar_chart("Morning (baseline)", "ML-optimized", push["primary"], as_pct=False)
+        with c2:
+            decision_badge(push["decision"])
+            st.metric("Lift", f"{push['primary'].relative_lift_pct:.1f}%",
+                      f"{push['primary'].diff:+.1f} sessions")
+            st.metric("p-value", f"{push['primary'].p_value:.4f}")
+            st.metric("Required n/arm (Cohen's d)", f"{push['required_n_per_arm']:,}",
+                       help=f"Observed effect size d={push['cohens_d']:.2f}; we had {push['primary'].n_a:,}/arm")
+
+        st.divider()
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**CUPED variance reduction**")
+            st.metric("Variance reduction", f"{push['cuped']['var_reduction_pct']:.1f}%",
+                       help="Covariate: acquisition-channel quality score (no pre-period history exists for "
+                            "these users — all assigned at signup — so a known-before-randomization proxy is used "
+                            "instead of each user's own pre-treatment value).")
+            st.caption(f"CUPED-adjusted p-value: {push['cuped_test'].p_value:.4f} (raw: {push['primary'].p_value:.4f}) — "
+                       "modest reduction since acquisition channel is a weak proxy for individual session count.")
+        with c2:
+            st.markdown("**Multiple comparison correction (Holm)**")
+            mc = push["multiple_comparison_correction"]
+            mc_df = pd.DataFrame({
+                "comparison": ["ml_optimized vs morning", "evening vs morning"],
+                "raw_p": mc["raw_p_values"],
+                "corrected_p": mc["corrected_p_values"],
+                "reject_null": mc["reject_null"],
+            })
+            st.dataframe(mc_df, width='stretch', hide_index=True)
+            st.caption("evening vs. morning does NOT survive correction — that arm's effect isn't distinguishable "
+                       "from noise at this sample size, even though the generator's true effect was negative.")
+
+        st.divider()
+        st.markdown("**The peeking problem: naive sequential checks vs. the correct boundary**")
+        peek_df = pd.DataFrame(push["sequential_peeks"])
+        peek_df["obrien_fleming_threshold"] = push["sequential_alphas"]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=peek_df["frac_of_data"], y=peek_df["p_value"], name="Observed p-value",
+                                  mode="lines+markers", line=dict(color=ACCENT, width=3)))
+        fig.add_trace(go.Scatter(x=peek_df["frac_of_data"], y=peek_df["obrien_fleming_threshold"],
+                                  name="O'Brien-Fleming threshold (this look)", mode="lines+markers",
+                                  line=dict(color="#F85149", dash="dash")))
+        fig.add_hline(y=0.05, line_dash="dot", line_color="#9AA5B1", annotation_text="naive alpha=0.05")
+        fig.update_layout(template=PLOTLY_TEMPLATE, height=340, margin=dict(t=10, b=10),
+                           xaxis_title="Fraction of data observed", yaxis_title="p-value",
+                           legend=dict(orientation="h", y=1.15))
+        st.plotly_chart(fig, width='stretch')
+        insight("At 75% of the data, the naive p-value (0.048) already looks significant against the unadjusted "
+                "0.05 line — but the proper sequential boundary at that look (0.024) says NOT YET. A team peeking "
+                "without correction would have shipped 1 look early on noise; the boundary that accounts for repeated "
+                "looks correctly waits for the final look, where p=0.0019 clears even the strict cumulative bar.")
 
 # ============================================================
 # RECOMMENDATIONS (Phase 5)
