@@ -509,16 +509,36 @@ def decision_badge(decision: dict):
 
 
 def ci_bar_chart(label_a: str, label_b: str, result, as_pct: bool):
+    """
+    Bars show each arm's own point estimate with its OWN confidence
+    interval as error bars -- not the CI of the difference between
+    arms overlaid on one bar, which is a different quantity entirely
+    (centered on the diff, not on that arm's value) and would
+    mislabel the chart. The diff's own CI is reported separately in
+    the metrics panel next to this chart, where it belongs.
+
+    Per-arm Wald CIs are only computed for proportions (as_pct=True),
+    since TestResult carries each arm's n but not its own variance for
+    continuous metrics (only the pooled/Welch SE of the difference) --
+    for continuous metrics (as_pct=False), bars are shown without
+    error whiskers rather than fabricating an incorrect one.
+    """
     scale = 100 if as_pct else 1
+    z = 1.96  # 95% CI
+
     fig = go.Figure()
-    for label, val, err_low, err_high, color in [
-        (label_a, result.metric_a, 0, 0, "#3D4F6B"),
-        (label_b, result.metric_b, abs(result.diff - result.ci_low) if result.ci_low <= result.diff else 0,
-         abs(result.ci_high - result.diff), ACCENT),
+    for label, val, n, color in [
+        (label_a, result.metric_a, result.n_a, "#3D4F6B"),
+        (label_b, result.metric_b, result.n_b, ACCENT),
     ]:
-        fig.add_trace(go.Bar(x=[label], y=[val * scale], marker_color=color,
-                              error_y=dict(type="data", array=[err_high * scale], arrayminus=[err_low * scale])
-                              if label == label_b else None))
+        if as_pct and n > 0:
+            se_arm = (val * (1 - val) / n) ** 0.5
+            err = z * se_arm * scale
+            error_y = dict(type="data", array=[err], arrayminus=[err])
+        else:
+            error_y = None
+        fig.add_trace(go.Bar(x=[label], y=[val * scale], marker_color=color, error_y=error_y))
+
     fig.update_layout(template=PLOTLY_TEMPLATE, height=300, margin=dict(t=10, b=10), showlegend=False,
                        yaxis_title=("%" if as_pct else "value"))
     st.plotly_chart(fig, width='stretch')
@@ -548,6 +568,7 @@ with tab_experiments:
             decision_badge(feed["decision"])
             st.metric("Lift", f"{feed['primary'].relative_lift_pct:.1f}%",
                       f"{feed['primary'].diff*100:.1f}pp")
+            st.caption(f"95% CI for the difference: [{feed['primary'].ci_low*100:.1f}pp, {feed['primary'].ci_high*100:.1f}pp]")
             st.metric("p-value", f"{feed['primary'].p_value:.4f}")
             st.metric("Required n/arm (for MDE)", f"{feed['required_n_per_arm']:,}",
                        help=f"We had {feed['primary'].n_a:,} (achieved power: {feed['achieved_power']:.0%})")
@@ -572,6 +593,7 @@ with tab_experiments:
             decision_badge(onboarding["decision"])
             st.metric("Lift", f"{onboarding['primary'].relative_lift_pct:.1f}%",
                       f"{onboarding['primary'].diff*100:.1f}pp")
+            st.caption(f"95% CI for the difference: [{onboarding['primary'].ci_low*100:.1f}pp, {onboarding['primary'].ci_high*100:.1f}pp]")
             st.metric("p-value", f"{onboarding['primary'].p_value:.2e}")
             st.metric("Required n/arm (for MDE)", f"{onboarding['required_n_per_arm']:,}",
                        help=f"We had {onboarding['primary'].n_a:,} (achieved power: {onboarding['achieved_power']:.0%})")
@@ -595,6 +617,7 @@ with tab_experiments:
             decision_badge(push["decision"])
             st.metric("Lift", f"{push['primary'].relative_lift_pct:.1f}%",
                       f"{push['primary'].diff:+.1f} sessions")
+            st.caption(f"95% CI for the difference: [{push['primary'].ci_low:+.2f}, {push['primary'].ci_high:+.2f}] sessions")
             st.metric("p-value", f"{push['primary'].p_value:.4f}")
             st.metric("Required n/arm (Cohen's d)", f"{push['required_n_per_arm']:,}",
                        help=f"Observed effect size d={push['cohens_d']:.2f}; we had {push['primary'].n_a:,}/arm")
