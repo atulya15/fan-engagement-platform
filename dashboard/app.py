@@ -44,6 +44,110 @@ ACCENT = "#5B8DEF"
 ACCENT_SOFT = "#7FA8F0"
 PLOTLY_TEMPLATE = "plotly_dark"
 
+# ============================================================
+# CUSTOM CSS — targets Streamlit's internal data-testid selectors
+# (stMetric, stPlotlyChart, stTabs, stDataFrame) rather than rebuilding
+# components from scratch, since that's the only stable way to style
+# Streamlit's pre-built widgets. Real ceiling here: Streamlit reruns
+# the whole script server-side rather than diffing the DOM client-side
+# the way a JS framework would, so a fade-in plays once per script run
+# rather than tracking actual scroll position — true scroll-triggered
+# animation is reserved for the Phase 6 deployed site, which won't be
+# built on raw Streamlit.
+# ============================================================
+def inject_custom_css():
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(14px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* KPI metric cards */
+    div[data-testid="stMetric"] {
+        background: linear-gradient(160deg, #161B22 0%, #1B2230 100%);
+        border: 1px solid #2A3142;
+        border-radius: 14px;
+        padding: 1rem 1.1rem 0.7rem 1.1rem;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+        animation: fadeInUp 0.5s ease both;
+    }
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 20px rgba(91,141,239,0.18);
+        border-color: #5B8DEF55;
+    }
+    div[data-testid="stMetricLabel"] { font-weight: 500; color: #9AA5B1; }
+    div[data-testid="stMetricValue"] { font-weight: 700; }
+
+    /* Chart "cards" */
+    div[data-testid="stPlotlyChart"] {
+        background: #12161D;
+        border: 1px solid #232938;
+        border-radius: 14px;
+        padding: 0.6rem;
+        box-shadow: 0 2px 14px rgba(0,0,0,0.3);
+        animation: fadeInUp 0.6s ease both;
+        transition: box-shadow 0.2s ease;
+    }
+    div[data-testid="stPlotlyChart"]:hover {
+        box-shadow: 0 6px 22px rgba(91,141,239,0.12);
+    }
+
+    /* Dataframes */
+    div[data-testid="stDataFrame"] {
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid #232938;
+        animation: fadeInUp 0.6s ease both;
+    }
+
+    /* Tabs: animated underline instead of the default flat bar */
+    button[data-baseweb="tab"] {
+        font-weight: 600;
+        transition: color 0.15s ease;
+    }
+    div[data-baseweb="tab-highlight"] {
+        background-color: #5B8DEF !important;
+        height: 3px !important;
+        border-radius: 3px;
+        transition: left 0.25s cubic-bezier(0.4,0,0.2,1), width 0.25s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    /* Section headers get a subtle accent rule */
+    h3 {
+        border-left: 3px solid #5B8DEF;
+        padding-left: 0.6rem;
+        animation: fadeInUp 0.45s ease both;
+    }
+
+    /* Title */
+    h1 { animation: fadeInUp 0.4s ease both; }
+
+    /* Insight callouts */
+    .insight-box {
+        background: #151B26;
+        border-left: 3px solid #5B8DEF;
+        border-radius: 8px;
+        padding: 0.55rem 0.9rem;
+        margin: 0.3rem 0 1rem 0;
+        color: #B7C2D0;
+        font-size: 0.86rem;
+        animation: fadeInUp 0.5s ease both;
+        transition: background 0.2s ease;
+    }
+    .insight-box:hover { background: #1A2230; }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+inject_custom_css()
+
 
 @st.cache_data(ttl=300)
 def load_dau_wau_mau():
@@ -118,8 +222,7 @@ def kpi_card(col, label: str, value: str, insight: str | None = None):
 
 
 def insight(text: str):
-    st.markdown(f"<div style='color:#9AA5B1;font-size:0.85rem;margin-top:-0.5rem;'>💡 {text}</div>",
-                unsafe_allow_html=True)
+    st.markdown(f"<div class='insight-box'>💡 {text}</div>", unsafe_allow_html=True)
 
 
 st.title("📊 Fan Engagement Platform — Executive Dashboard")
