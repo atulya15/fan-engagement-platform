@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+:root {
+  /* Deep-near-black premium dark system, not pure OLED black --
+     avoids the flat/cheap look of #000 and gives cards somewhere
+     to sit a shade above the page. */
+  --color-deep: #020203;
+  --color-base: #050506;
+  --color-elevated: #0a0a0c;
+  --color-surface: rgba(255, 255, 255, 0.04);
+  --color-surface-hover: rgba(255, 255, 255, 0.07);
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.14);
+
+  --color-foreground: #ededef;
+  --color-foreground-muted: #8a8f98;
+  --color-foreground-faint: #5b5f68;
+
+  --color-accent: #5e6ad2;
+  --color-accent-bright: #818cf8;
+  --color-accent-glow: rgba(94, 106, 210, 0.25);
+
+  --color-positive: #3fb950;
+  --color-negative: #f47174;
+  --color-warning: #d29922;
+
+  --ease-premium: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@theme inline {
+  --color-background: var(--color-base);
+  --color-foreground: var(--color-foreground);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-mono);
+}
+
+@layer base {
+  body {
+    background: var(--color-base);
+    background-image: radial-gradient(
+        ellipse 80% 50% at 50% -20%,
+        rgba(94, 106, 210, 0.12),
+        transparent
+      ),
+      linear-gradient(180deg, var(--color-deep) 0%, var(--color-base) 100%);
+    color: var(--color-foreground);
+  }
+
+  ::selection {
+    background: var(--color-accent-glow);
+    color: var(--color-foreground);
+  }
+
+  * {
+    scrollbar-color: var(--color-border-strong) transparent;
+  }
+}
+
+@layer utilities {
+  .bg-base {
+    background-color: var(--color-base);
+  }
+  .bg-elevated {
+    background-color: var(--color-elevated);
+  }
+  .bg-surface {
+    background-color: var(--color-surface);
+  }
+  .bg-surface-hover:hover {
+    background-color: var(--color-surface-hover);
+  }
+  .bg-accent {
+    background-color: var(--color-accent);
+  }
+  .border-hairline {
+    border-color: var(--color-border);
+  }
+  .text-muted {
+    color: var(--color-foreground-muted);
+  }
+  .text-faint {
+    color: var(--color-foreground-faint);
+  }
+  .text-accent {
+    color: var(--color-accent-bright);
+  }
+  .num {
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum";
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
