@@ -8,7 +8,7 @@ different implementations that could drift out of sync.
 """
 
 from recommendations.collaborative import recommend_cf, train_als
-from recommendations.content_based import build_item_similarity, recommend_for_new_user
+from recommendations.content_based import build_cold_start_lookup, build_item_similarity
 from recommendations.data import build_interaction_matrix, build_widget_features, load_events, temporal_split
 from recommendations.hybrid import build_training_examples, compute_feature_lookups, recommend_hybrid, train_hybrid_ranker
 
@@ -16,7 +16,11 @@ from recommendations.hybrid import build_training_examples, compute_feature_look
 def train_recommender_state() -> dict:
     """Trains ALS + the hybrid LightGBM ranker on the TRAIN split and
     returns everything needed to serve recommendations. Expensive
-    (~2 min) -- call once, cache the result, never call per-request."""
+    (~2 min) -- call once via recommendations/train_and_save.py, never
+    per-request or at API boot (see that script's docstring for why:
+    the full event-level train_df, sparse interaction matrix, and ALS
+    model are all training-only memory, dropped from what's returned
+    here since none of them are touched by get_recommendation)."""
     events = load_events()
     train_df, _test_df = temporal_split(events)
 
@@ -43,14 +47,13 @@ def train_recommender_state() -> dict:
         .groupby("user_id")["widget_id"].apply(set).to_dict()
     user_segment_map = events.drop_duplicates("user_id").set_index("user_id")["user_segment"].to_dict()
     user_channel_map = events.drop_duplicates("user_id").set_index("user_id")["acquisition_channel"].to_dict()
+    cold_start_lookup = build_cold_start_lookup(train_df)
 
     return dict(
-        train_df=train_df, als_model=als_model, train_matrix=train_matrix,
-        user_idx=user_idx, widget_idx=widget_idx, item_sim=item_sim,
         widget_ids=widget_ids, widget_type_map=widget_type_map,
         cf_scores=cf_scores, lookups=lookups, hybrid_model=hybrid_model,
         user_history=user_history, user_segment_map=user_segment_map,
-        user_channel_map=user_channel_map,
+        user_channel_map=user_channel_map, cold_start_lookup=cold_start_lookup,
     )
 
 
@@ -70,7 +73,7 @@ def get_recommendation(state: dict, user_id: int, n: int = 10) -> dict:
         method_used = "content_based_cold_start"
         why = (f"No interaction history for this user (cold start) — falling back to the top engaged "
                f"widgets within their acquisition-channel cohort ('{channel}').")
-        widget_ids = recommend_for_new_user(channel, state["train_df"], n=n)
+        widget_ids = state["cold_start_lookup"].get(channel, state["cold_start_lookup"]["_all"])[:n]
         ranked = [(w, 1.0) for w in widget_ids]
     else:
         method_used = "hybrid"

@@ -42,6 +42,20 @@ def recommend_for_new_user(acquisition_channel: str, train_df: pd.DataFrame, n: 
     return top.index.tolist()
 
 
+def build_cold_start_lookup(train_df: pd.DataFrame, n: int = 20) -> dict[str, list[int]]:
+    """Precomputes recommend_for_new_user's result for every acquisition
+    channel (plus an "_all" fallback), so the API can serve cold-start
+    recommendations from a small dict instead of keeping the full
+    event-level train_df in memory just for this one lookup."""
+    engaged = train_df[train_df["event_type"].isin(["interaction", "completion"])]
+    lookup = {"_all": engaged["widget_id"].value_counts().head(n).index.tolist()}
+    for channel in train_df["acquisition_channel"].dropna().unique():
+        cohort = engaged[engaged["acquisition_channel"] == channel]
+        top = cohort["widget_id"].value_counts().head(n)
+        lookup[channel] = top.index.tolist() if len(top) > 0 else lookup["_all"]
+    return lookup
+
+
 def recommend_similar_to_history(user_id: int, train_df: pd.DataFrame, item_sim: pd.DataFrame,
                                   n: int = 10) -> list[int]:
     """

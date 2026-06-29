@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 
-from metrics.db import run_query_chunked
+from metrics.db import run_query
 
 # Implicit-feedback confidence weights by event type, mirroring the
 # POINTS_MAP weighting already used in generate_data.py's gamification
@@ -31,6 +31,23 @@ EVENT_WEIGHT = {"impression": 1, "interaction": 5, "completion": 10}
 
 
 def load_events() -> pd.DataFrame:
+    """
+    run_query_chunked's `chunksize` only batches the CLIENT-SIDE fetch
+    over an already-running query -- it does nothing about how long
+    that single statement takes to EXECUTE on the server, which is
+    exactly what free-tier Supabase's statement_timeout was hitting
+    here on the full ~2M-row 3-table join (confirmed: indexes already
+    exist on every join key in schema.sql, so this isn't a missing-
+    index problem, just more join than the free-tier compute tier can
+    finish inside one statement). Splitting into monthly WHERE-bounded
+    queries keeps each individual statement small enough to finish
+    well under the timeout, at the cost of N round trips instead of 1.
+    """
+    bounds = run_query(
+        "SELECT MIN(event_timestamp) AS lo, MAX(event_timestamp) AS hi FROM widget_events"
+    )
+    lo, hi = pd.to_datetime(bounds["lo"].iloc[0]), pd.to_datetime(bounds["hi"].iloc[0])
+
     sql = """
     SELECT we.user_id, we.widget_id, we.event_type, we.event_timestamp,
            w.widget_type, w.sport, w.launch_date,
@@ -38,8 +55,18 @@ def load_events() -> pd.DataFrame:
     FROM widget_events we
     JOIN widgets w ON w.widget_id = we.widget_id
     JOIN users u ON u.user_id = we.user_id
+    WHERE we.event_timestamp >= %(start)s AND we.event_timestamp < %(end)s
     """
-    df = run_query_chunked(sql)
+    chunks = []
+    start = lo
+    while start < hi:
+        end = min(start + timedelta(days=30), hi + timedelta(seconds=1))
+        chunk = run_query(sql, params={"start": start, "end": end})
+        if len(chunk) > 0:
+            chunks.append(chunk)
+        start = end
+
+    df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
     df["event_timestamp"] = pd.to_datetime(df["event_timestamp"])
     df["launch_date"] = pd.to_datetime(df["launch_date"])
     df["signup_date"] = pd.to_datetime(df["signup_date"])
